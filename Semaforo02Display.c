@@ -129,22 +129,25 @@ void vTaskSaida(void *pvParameters)
     {
         if (xSemaphoreTake(xSemSaida, portMAX_DELAY))
         {
-            if (xSemaphoreTake(xSemContador, portMAX_DELAY))
+            if (uxSemaphoreGetCount(xSemContador) > 0)
             {
-                // Atualiza display
-                if (xSemaphoreTake(xMutexDisplay, portMAX_DELAY) == pdTRUE)
+                if (xSemaphoreTake(xSemContador, portMAX_DELAY))
                 {
-                    ssd1306_fill(&ssd, false);
-                    ssd1306_draw_string(&ssd, "Saida OK!", 5, 20);
-                    ssd1306_draw_string(&ssd, "Usuarios:", 5, 40);
-                    char buffer[10];
-                    sprintf(buffer, "%d/%d", uxSemaphoreGetCount(xSemContador), MAX_USUARIOS);
-                    ssd1306_draw_string(&ssd, buffer, 80, 40);
-                    ssd1306_send_data(&ssd);
-                    xSemaphoreGive(xMutexDisplay); // LIBERA o mutex
-                }
+                    // Atualiza display
+                    if (xSemaphoreTake(xMutexDisplay, portMAX_DELAY) == pdTRUE)
+                    {
+                        ssd1306_fill(&ssd, false);
+                        ssd1306_draw_string(&ssd, "Saida OK!", 5, 20);
+                        ssd1306_draw_string(&ssd, "Usuarios:", 5, 40);
+                        char buffer[10];
+                        sprintf(buffer, "%d/%d", uxSemaphoreGetCount(xSemContador), MAX_USUARIOS);
+                        ssd1306_draw_string(&ssd, buffer, 80, 40);
+                        ssd1306_send_data(&ssd);
+                        xSemaphoreGive(xMutexDisplay); // LIBERA o mutex
+                    }
 
-                atualizarLED();
+                    atualizarLED();
+                }
             }
         }
         vTaskDelay(pdMS_TO_TICKS(100));
