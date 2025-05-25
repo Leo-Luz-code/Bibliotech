@@ -23,7 +23,7 @@
 #define LED_AZUL 12
 #define LED_VERMELHO 13
 
-#define MAX_USUARIOS 8 // Capacidade máxima
+#define MAX_USUARIOS 10 // Capacidade máxima
 
 #define BUZZER 21
 uint32_t last_buzzer_time = 0;
@@ -129,11 +129,14 @@ void vTaskEntrada(void *pvParameters)
                 if (xSemaphoreTake(xMutexDisplay, portMAX_DELAY) == pdTRUE)
                 {
                     ssd1306_fill(&ssd, false);
-                    ssd1306_draw_string(&ssd, "Entrada OK!", 5, 20);
-                    ssd1306_draw_string(&ssd, "Usuarios:", 5, 40);
+                    ssd1306_draw_string(&ssd, "Biblioteca", 12, 5);
+                    ssd1306_line(&ssd, 0, 13, 128, 13, true);
+                    ssd1306_draw_string(&ssd, "Entrada OK!", 10, 20);
+                    ssd1306_draw_string(&ssd, "Usuarios: ", 10, 40);
                     char buffer[10];
                     sprintf(buffer, "%d/%d", uxSemaphoreGetCount(xSemContador), MAX_USUARIOS);
-                    ssd1306_draw_string(&ssd, buffer, 80, 40);
+                    ssd1306_draw_string(&ssd, buffer, 82, 40);
+                    ssd1306_draw_string(&ssd, "Bem-vindo(a)!", 10, 55);
                     ssd1306_send_data(&ssd);
                     xSemaphoreGive(xMutexDisplay); // LIBERA o mutex
                 }
@@ -144,6 +147,22 @@ void vTaskEntrada(void *pvParameters)
             {
                 // Sistema cheio - beep curto
                 beep(buzzer_interval_short);
+
+                // Atualiza display (protegido por Mutex)
+                if (xSemaphoreTake(xMutexDisplay, portMAX_DELAY) == pdTRUE)
+                {
+                    ssd1306_fill(&ssd, false);
+                    ssd1306_draw_string(&ssd, "Biblioteca", 12, 5);
+                    ssd1306_line(&ssd, 0, 13, 128, 13, true);
+                    ssd1306_draw_string(&ssd, "Esta cheio!", 10, 20);
+                    ssd1306_draw_string(&ssd, "Usuarios: ", 10, 40);
+                    char buffer[10];
+                    sprintf(buffer, "%d/%d", uxSemaphoreGetCount(xSemContador), MAX_USUARIOS);
+                    ssd1306_draw_string(&ssd, buffer, 82, 40);
+                    ssd1306_draw_string(&ssd, "Aguarde saidas", 10, 55);
+                    ssd1306_send_data(&ssd);
+                    xSemaphoreGive(xMutexDisplay); // LIBERA o mutex
+                }
             }
         }
     }
@@ -165,11 +184,14 @@ void vTaskSaida(void *pvParameters)
                     if (xSemaphoreTake(xMutexDisplay, portMAX_DELAY) == pdTRUE)
                     {
                         ssd1306_fill(&ssd, false);
-                        ssd1306_draw_string(&ssd, "Saida OK!", 5, 20);
-                        ssd1306_draw_string(&ssd, "Usuarios:", 5, 40);
+                        ssd1306_draw_string(&ssd, "Biblioteca", 12, 5);
+                        ssd1306_line(&ssd, 0, 13, 128, 13, true);
+                        ssd1306_draw_string(&ssd, "Saida OK!", 10, 20);
+                        ssd1306_draw_string(&ssd, "Usuarios: ", 10, 40);
                         char buffer[10];
                         sprintf(buffer, "%d/%d", uxSemaphoreGetCount(xSemContador), MAX_USUARIOS);
-                        ssd1306_draw_string(&ssd, buffer, 80, 40);
+                        ssd1306_draw_string(&ssd, buffer, 82, 40);
+                        ssd1306_draw_string(&ssd, "Volte sempre!", 10, 55);
                         ssd1306_send_data(&ssd);
                         xSemaphoreGive(xMutexDisplay); // LIBERA o mutex
                     }
@@ -204,11 +226,14 @@ void vTaskReset(void *pvParameters)
             if (xSemaphoreTake(xMutexDisplay, portMAX_DELAY) == pdTRUE)
             {
                 ssd1306_fill(&ssd, false);
-                ssd1306_draw_string(&ssd, "Resetado!", 5, 20);
-                ssd1306_draw_string(&ssd, "Usuarios: ", 5, 40);
+                ssd1306_draw_string(&ssd, "Biblioteca", 12, 5);
+                ssd1306_line(&ssd, 0, 13, 128, 13, true);
+                ssd1306_draw_string(&ssd, "RESET", 10, 20);
+                ssd1306_draw_string(&ssd, "Usuarios: ", 10, 40);
                 char buffer[10];
                 sprintf(buffer, "%d/%d", uxSemaphoreGetCount(xSemContador), MAX_USUARIOS);
-                ssd1306_draw_string(&ssd, buffer, 80, 40);
+                ssd1306_draw_string(&ssd, buffer, 82, 40);
+                ssd1306_draw_string(&ssd, "Aguardando...", 10, 55);
                 ssd1306_send_data(&ssd);
                 xSemaphoreGive(xMutexDisplay); // LIBERA o mutex
             }
@@ -297,7 +322,11 @@ int main()
 
     // Tela inicial
     ssd1306_fill(&ssd, 0);
-    ssd1306_draw_string(&ssd, "Aguardando       evento...", 5, 25);
+    ssd1306_draw_string(&ssd, "Biblioteca", 12, 5);
+    ssd1306_line(&ssd, 0, 13, 128, 13, true);
+    ssd1306_draw_string(&ssd, "Aguardando       pessoas...", 10, 20);
+    ssd1306_draw_string(&ssd, "BotaoA+ BotaoB-", 5, 45);
+    ssd1306_draw_string(&ssd, "BotaoJoy-RESET", 5, 55);
     ssd1306_send_data(&ssd);
 
     // Cria tarefas
