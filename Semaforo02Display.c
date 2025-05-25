@@ -1,6 +1,7 @@
 #include "pico/stdlib.h"
 #include "hardware/gpio.h"
 #include "hardware/i2c.h"
+#include "hardware/pwm.h"
 #include "lib/ssd1306.h"
 #include "FreeRTOS.h"
 #include "task.h"
@@ -21,9 +22,17 @@
 #define LED_VERDE 11
 #define LED_AZUL 12
 #define LED_VERMELHO 13
-#define BUZZER 21
 
 #define MAX_USUARIOS 8 // Capacidade máxima
+
+#define BUZZER 21
+uint32_t last_buzzer_time = 0;
+uint32_t buzzer_interval = 250;       // Intervalo para desligar o buzzer
+uint32_t buzzer_interval_short = 100; // Intervalo curto para beep
+bool buzzer_state = false;            // Estado atual do buzzer
+const float DIVIDER_PWM = 16.0;       // Divisor de clock para PWM
+const uint16_t PERIOD = 4096;         // Período do PWM
+uint slice_buzzer;                    // Slice do PWM para o buzzer
 
 // --- Variáveis Globais ---
 ssd1306_t ssd;
@@ -43,6 +52,8 @@ void vTaskReset(void *pvParameters);
 void atualizarLED();
 void beep(uint16_t duracao_ms);
 void gpio_callback(uint gpio, uint32_t events);
+void buzzer_on();
+void buzzer_off();
 
 // --- Inicialização do Hardware ---
 void initHardware()
@@ -82,8 +93,25 @@ void initHardware()
     gpio_set_dir(LED_VERMELHO, GPIO_OUT);
 
     // Configura Buzzer
-    gpio_init(BUZZER);
-    gpio_set_dir(BUZZER, GPIO_OUT);
+    gpio_set_function(BUZZER, GPIO_FUNC_PWM);
+    slice_buzzer = pwm_gpio_to_slice_num(BUZZER);
+    pwm_set_clkdiv(slice_buzzer, DIVIDER_PWM);
+    pwm_set_wrap(slice_buzzer, PERIOD);
+    pwm_set_gpio_level(BUZZER, 0);
+    pwm_set_enabled(slice_buzzer, true);
+}
+
+void buzzer_on()
+{
+    pwm_set_gpio_level(BUZZER, 300);
+    buzzer_state = true;
+    last_buzzer_time = time_us_64();
+}
+
+void buzzer_off()
+{
+    pwm_set_gpio_level(BUZZER, 0);
+    buzzer_state = false;
 }
 
 // --- Tarefa de Entrada (Botão A) ---
@@ -115,7 +143,7 @@ void vTaskEntrada(void *pvParameters)
             else
             {
                 // Sistema cheio - beep curto
-                beep(200);
+                beep(buzzer_interval_short);
             }
         }
     }
@@ -161,13 +189,16 @@ void vTaskReset(void *pvParameters)
     {
         if (xSemaphoreTake(xSemReset, portMAX_DELAY))
         {
-            // Zera a contagem
-            xSemContador = xSemaphoreCreateCounting(MAX_USUARIOS, 0);
+            // Zera o semáforo de forma atômica e sem bloqueio
+            while (xSemaphoreTake(xSemContador, 0) == pdTRUE)
+            {
+                // Continua retirando até que não haja mais usuários
+            }
 
             // Beep duplo
-            beep(100);
+            beep(buzzer_interval);
             vTaskDelay(pdMS_TO_TICKS(150));
-            beep(100);
+            beep(buzzer_interval);
 
             // Atualiza display
             if (xSemaphoreTake(xMutexDisplay, portMAX_DELAY) == pdTRUE)
@@ -184,6 +215,7 @@ void vTaskReset(void *pvParameters)
 
             atualizarLED();
         }
+        vTaskDelay(pdMS_TO_TICKS(100));
     }
 }
 
@@ -216,9 +248,9 @@ void atualizarLED()
 // --- Gera beep no buzzer ---
 void beep(uint16_t duracao_ms)
 {
-    gpio_put(BUZZER, 1);
-    vTaskDelay(pdMS_TO_TICKS(duracao_ms));
-    gpio_put(BUZZER, 0);
+    buzzer_on();
+    vTaskDelay(pdMS_TO_TICKS(duracao_ms)); // Bloqueia a tarefa pelo tempo do beep
+    buzzer_off();
 }
 
 // --- ISR para os botões ---
