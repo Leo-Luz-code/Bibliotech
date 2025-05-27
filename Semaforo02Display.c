@@ -1,6 +1,7 @@
 #include "pico/stdlib.h"
 #include "hardware/gpio.h"
 #include "hardware/i2c.h"
+#include "hardware/pwm.h"
 #include "lib/ssd1306.h"
 #include "FreeRTOS.h"
 #include "task.h"
@@ -21,19 +22,28 @@
 #define LED_VERDE 11
 #define LED_AZUL 12
 #define LED_VERMELHO 13
-#define BUZZER 21
 
-#define MAX_USUARIOS 8 // Capacidade máxima
+#define MAX_USUARIOS 10 // Capacidade máxima
+
+#define BUZZER 21
+uint32_t last_buzzer_time = 0;
+uint32_t buzzer_interval = 250;       // Intervalo para desligar o buzzer
+uint32_t buzzer_interval_short = 100; // Intervalo curto para beep
+bool buzzer_state = false;            // Estado atual do buzzer
+const float DIVIDER_PWM = 16.0;       // Divisor de clock para PWM
+const uint16_t PERIOD = 4096;         // Período do PWM
+uint slice_buzzer;                    // Slice do PWM para o buzzer
 
 // --- Variáveis Globais ---
 ssd1306_t ssd;
 SemaphoreHandle_t xSemContador;  // Semáforo de contagem
 SemaphoreHandle_t xSemReset;     // Semáforo binário (reset)
+SemaphoreHandle_t xSemEntrada;   // Semáforo para entrada
+SemaphoreHandle_t xSemSaida;     // Semáforo para saída
 SemaphoreHandle_t xMutexDisplay; // Mutex para o OLED
 
 static volatile uint32_t current_time; // Tempo atual (usado para debounce)
 static volatile uint32_t last_time_button = 0;
-uint8_t usuariosAtivos = 0;
 
 // --- Protótipos de Funções ---
 void vTaskEntrada(void *pvParameters);
@@ -42,6 +52,8 @@ void vTaskReset(void *pvParameters);
 void atualizarLED();
 void beep(uint16_t duracao_ms);
 void gpio_callback(uint gpio, uint32_t events);
+void buzzer_on();
+void buzzer_off();
 
 // --- Inicialização do Hardware ---
 void initHardware()
@@ -81,8 +93,25 @@ void initHardware()
     gpio_set_dir(LED_VERMELHO, GPIO_OUT);
 
     // Configura Buzzer
-    gpio_init(BUZZER);
-    gpio_set_dir(BUZZER, GPIO_OUT);
+    gpio_set_function(BUZZER, GPIO_FUNC_PWM);
+    slice_buzzer = pwm_gpio_to_slice_num(BUZZER);
+    pwm_set_clkdiv(slice_buzzer, DIVIDER_PWM);
+    pwm_set_wrap(slice_buzzer, PERIOD);
+    pwm_set_gpio_level(BUZZER, 0);
+    pwm_set_enabled(slice_buzzer, true);
+}
+
+void buzzer_on()
+{
+    pwm_set_gpio_level(BUZZER, 300);
+    buzzer_state = true;
+    last_buzzer_time = time_us_64();
+}
+
+void buzzer_off()
+{
+    pwm_set_gpio_level(BUZZER, 0);
+    buzzer_state = false;
 }
 
 // --- Tarefa de Entrada (Botão A) ---
@@ -90,38 +119,54 @@ void vTaskEntrada(void *pvParameters)
 {
     while (1)
     {
-        if (gpio_get(BOTAO_ENTRADA) == 0)
+        if (xSemaphoreTake(xSemEntrada, portMAX_DELAY))
         {
-            if (xSemaphoreTake(xSemContador, portMAX_DELAY))
+            if (uxSemaphoreGetCount(xSemContador) < MAX_USUARIOS)
             {
-                if (usuariosAtivos < MAX_USUARIOS)
+                xSemaphoreGive(xSemContador);
+
+                // Atualiza display (protegido por Mutex)
+                if (xSemaphoreTake(xMutexDisplay, portMAX_DELAY) == pdTRUE)
                 {
-                    usuariosAtivos++;
-
-                    // Atualiza display (protegido por Mutex)
-                    if (xSemaphoreTake(xMutexDisplay, portMAX_DELAY) == pdTRUE)
-                    {
-                        ssd1306_fill(&ssd, false);
-                        ssd1306_draw_string(&ssd, "Entrada OK!", 5, 20);
-                        ssd1306_draw_string(&ssd, "Usuarios:", 5, 40);
-                        char buffer[10];
-                        sprintf(buffer, "%d/%d", usuariosAtivos, MAX_USUARIOS);
-                        ssd1306_draw_string(&ssd, buffer, 80, 40);
-                        ssd1306_send_data(&ssd);
-                        xSemaphoreGive(xMutexDisplay); // LIBERA o mutex
-                    }
-
-                    atualizarLED();
+                    ssd1306_fill(&ssd, false);
+                    ssd1306_draw_string(&ssd, "Biblioteca", 12, 5);
+                    ssd1306_line(&ssd, 0, 13, 128, 13, true);
+                    ssd1306_draw_string(&ssd, "Entrada OK!", 10, 20);
+                    ssd1306_draw_string(&ssd, "Usuarios: ", 10, 40);
+                    char buffer[10];
+                    sprintf(buffer, "%d/%d", uxSemaphoreGetCount(xSemContador), MAX_USUARIOS);
+                    ssd1306_draw_string(&ssd, buffer, 82, 40);
+                    ssd1306_draw_string(&ssd, "Bem-vindo(a)!", 10, 55);
+                    ssd1306_send_data(&ssd);
+                    xSemaphoreGive(xMutexDisplay); // LIBERA o mutex
                 }
-                else
+
+                atualizarLED();
+            }
+            else
+            {
+                // Sistema cheio - beep curto
+                beep(buzzer_interval_short);
+
+                // Atualiza display (protegido por Mutex)
+                if (xSemaphoreTake(xMutexDisplay, portMAX_DELAY) == pdTRUE)
                 {
-                    // Sistema cheio - beep curto
-                    beep(200);
+                    ssd1306_fill(&ssd, false);
+                    ssd1306_draw_string(&ssd, "Biblioteca", 12, 5);
+                    ssd1306_line(&ssd, 0, 13, 128, 13, true);
+                    ssd1306_draw_string(&ssd, "Esta cheio!", 10, 20);
+                    ssd1306_draw_string(&ssd, "Usuarios: ", 10, 40);
+                    char buffer[10];
+                    sprintf(buffer, "%d/%d", uxSemaphoreGetCount(xSemContador), MAX_USUARIOS);
+                    ssd1306_draw_string(&ssd, buffer, 82, 40);
+                    ssd1306_draw_string(&ssd, "Aguarde saidas", 10, 55);
+                    ssd1306_send_data(&ssd);
+                    xSemaphoreGive(xMutexDisplay); // LIBERA o mutex
                 }
             }
         }
-        vTaskDelay(pdMS_TO_TICKS(100));
     }
+    vTaskDelay(pdMS_TO_TICKS(100));
 }
 
 // --- Tarefa de Saída (Botão B) ---
@@ -129,23 +174,24 @@ void vTaskSaida(void *pvParameters)
 {
     while (1)
     {
-        if (gpio_get(BOTAO_SAIDA) == 0)
+        if (xSemaphoreTake(xSemSaida, portMAX_DELAY))
         {
-            if (xSemaphoreTake(xSemContador, portMAX_DELAY))
+            if (uxSemaphoreGetCount(xSemContador) > 0)
             {
-                if (usuariosAtivos > 0)
+                if (xSemaphoreTake(xSemContador, portMAX_DELAY))
                 {
-                    usuariosAtivos--;
-
                     // Atualiza display
                     if (xSemaphoreTake(xMutexDisplay, portMAX_DELAY) == pdTRUE)
                     {
                         ssd1306_fill(&ssd, false);
-                        ssd1306_draw_string(&ssd, "Saida OK!", 5, 20);
-                        ssd1306_draw_string(&ssd, "Usuarios:", 5, 40);
+                        ssd1306_draw_string(&ssd, "Biblioteca", 12, 5);
+                        ssd1306_line(&ssd, 0, 13, 128, 13, true);
+                        ssd1306_draw_string(&ssd, "Saida OK!", 10, 20);
+                        ssd1306_draw_string(&ssd, "Usuarios: ", 10, 40);
                         char buffer[10];
-                        sprintf(buffer, "%d/%d", usuariosAtivos, MAX_USUARIOS);
-                        ssd1306_draw_string(&ssd, buffer, 80, 40);
+                        sprintf(buffer, "%d/%d", uxSemaphoreGetCount(xSemContador), MAX_USUARIOS);
+                        ssd1306_draw_string(&ssd, buffer, 82, 40);
+                        ssd1306_draw_string(&ssd, "Volte sempre!", 10, 55);
                         ssd1306_send_data(&ssd);
                         xSemaphoreGive(xMutexDisplay); // LIBERA o mutex
                     }
@@ -165,27 +211,36 @@ void vTaskReset(void *pvParameters)
     {
         if (xSemaphoreTake(xSemReset, portMAX_DELAY))
         {
-            // Zera a contagem
-            xSemContador = xSemaphoreCreateCounting(MAX_USUARIOS, 0);
-            usuariosAtivos = 0;
+            // Zera o semáforo de forma atômica e sem bloqueio
+            while (xSemaphoreTake(xSemContador, 0) == pdTRUE)
+            {
+                // Continua retirando até que não haja mais usuários
+            }
 
             // Beep duplo
-            beep(100);
+            beep(buzzer_interval);
             vTaskDelay(pdMS_TO_TICKS(150));
-            beep(100);
+            beep(buzzer_interval);
 
             // Atualiza display
             if (xSemaphoreTake(xMutexDisplay, portMAX_DELAY) == pdTRUE)
             {
                 ssd1306_fill(&ssd, false);
-                ssd1306_draw_string(&ssd, "Resetado!", 5, 20);
-                ssd1306_draw_string(&ssd, "Usuarios: 0", 5, 40);
+                ssd1306_draw_string(&ssd, "Biblioteca", 12, 5);
+                ssd1306_line(&ssd, 0, 13, 128, 13, true);
+                ssd1306_draw_string(&ssd, "RESET", 10, 20);
+                ssd1306_draw_string(&ssd, "Usuarios: ", 10, 40);
+                char buffer[10];
+                sprintf(buffer, "%d/%d", uxSemaphoreGetCount(xSemContador), MAX_USUARIOS);
+                ssd1306_draw_string(&ssd, buffer, 82, 40);
+                ssd1306_draw_string(&ssd, "Aguardando...", 10, 55);
                 ssd1306_send_data(&ssd);
                 xSemaphoreGive(xMutexDisplay); // LIBERA o mutex
             }
 
             atualizarLED();
         }
+        vTaskDelay(pdMS_TO_TICKS(100));
     }
 }
 
@@ -196,15 +251,15 @@ void atualizarLED()
     gpio_put(LED_AZUL, 0);
     gpio_put(LED_VERMELHO, 0);
 
-    if (usuariosAtivos == 0)
+    if (uxSemaphoreGetCount(xSemContador) == 0)
     {
         gpio_put(LED_AZUL, 1); // Azul (0 usuários)
     }
-    else if (usuariosAtivos <= MAX_USUARIOS - 2)
+    else if (uxSemaphoreGetCount(xSemContador) <= MAX_USUARIOS - 2)
     {
         gpio_put(LED_VERDE, 1); // Verde (1 a MAX-2)
     }
-    else if (usuariosAtivos == MAX_USUARIOS - 1)
+    else if (uxSemaphoreGetCount(xSemContador) == MAX_USUARIOS - 1)
     {
         gpio_put(LED_VERDE, 1);    // Amarelo (MAX-1)
         gpio_put(LED_VERMELHO, 1); // (Verde + Vermelho = Amarelo)
@@ -218,9 +273,9 @@ void atualizarLED()
 // --- Gera beep no buzzer ---
 void beep(uint16_t duracao_ms)
 {
-    gpio_put(BUZZER, 1);
-    vTaskDelay(pdMS_TO_TICKS(duracao_ms));
-    gpio_put(BUZZER, 0);
+    buzzer_on();
+    vTaskDelay(pdMS_TO_TICKS(duracao_ms)); // Bloqueia a tarefa pelo tempo do beep
+    buzzer_off();
 }
 
 // --- ISR para os botões ---
@@ -239,7 +294,14 @@ void gpio_callback(uint gpio, uint32_t events)
             xSemaphoreGiveFromISR(xSemReset, &xHigherPriorityTaskWoken);
         }
 
-        xSemaphoreGiveFromISR(xSemContador, &xHigherPriorityTaskWoken);
+        else if (gpio == BOTAO_ENTRADA)
+        {
+            xSemaphoreGiveFromISR(xSemEntrada, &xHigherPriorityTaskWoken);
+        }
+        else if (gpio == BOTAO_SAIDA)
+        {
+            xSemaphoreGiveFromISR(xSemSaida, &xHigherPriorityTaskWoken);
+        }
 
         portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
     }
@@ -254,11 +316,17 @@ int main()
     // Cria semáforos e mutex
     xSemContador = xSemaphoreCreateCounting(MAX_USUARIOS, 0);
     xSemReset = xSemaphoreCreateBinary();
+    xSemEntrada = xSemaphoreCreateBinary();
+    xSemSaida = xSemaphoreCreateBinary();
     xMutexDisplay = xSemaphoreCreateMutex();
 
     // Tela inicial
     ssd1306_fill(&ssd, 0);
-    ssd1306_draw_string(&ssd, "Aguardando       evento...", 5, 25);
+    ssd1306_draw_string(&ssd, "Biblioteca", 12, 5);
+    ssd1306_line(&ssd, 0, 13, 128, 13, true);
+    ssd1306_draw_string(&ssd, "Aguardando       pessoas...", 10, 20);
+    ssd1306_draw_string(&ssd, "BotaoA+ BotaoB-", 5, 45);
+    ssd1306_draw_string(&ssd, "BotaoJoy-RESET", 5, 55);
     ssd1306_send_data(&ssd);
 
     // Cria tarefas
