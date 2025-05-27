@@ -7,7 +7,7 @@ include(pico_sdk_import.cmake)
 set(FREERTOS_KERNEL_PATH "D:/FreeRTOS-Kernel")
 include(${FREERTOS_KERNEL_PATH}/portable/ThirdParty/GCC/RP2040/FreeRTOS_Kernel_import.cmake)
 
-project(PiscaLed C CXX ASM)
+project(Bibliotech C CXX ASM)
 pico_sdk_init()
 
 
@@ -15,7 +15,7 @@ include_directories(${CMAKE_SOURCE_DIR}/lib)
 
 
 add_executable(${PROJECT_NAME}  
-        Semaforo02Display.c 
+        ${PROJECT_NAME}.c 
         lib/ssd1306.c # Biblioteca para o display OLED
         )
 
